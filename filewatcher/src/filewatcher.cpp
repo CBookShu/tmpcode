@@ -167,6 +167,26 @@ void FileWatcher::OnThreadFunc()
 		ULONG count;
 		ULONG_PTR key;
 
+		if (delayset.size()) {
+			// 遇到一种情况，如果本地文件修改太频繁
+			// 原来的优先级是有修改触发，就不再检查该队列，导致了修改的回调永远无法调用
+			// 于是就只得把检查队列放在了这里
+			auto now = std::chrono::system_clock::now();
+			auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - pre).count();
+			if (diff >= delaytime) {
+				for (auto& path : delayset)
+				{
+					auto it = listeners.equal_range(path);
+					for (auto b = it.first; b != it.second; ++b)
+					{
+						LOG_INFO("file modify %s", path.c_str());
+						b->second->callback(path);
+					}
+				}
+				delayset.clear();
+			}
+		}
+
 		auto success = GetQueuedCompletionStatusEx(m_hIOCP,
 			overlappeds,
 			_countof(overlappeds),
@@ -179,24 +199,6 @@ void FileWatcher::OnThreadFunc()
 			auto e = my_getlasterror();
 			if (e != WAIT_TIMEOUT) {
 				LOG_ERROR("GetQueuedCompletionStatusEx %d", e);
-			}
-
-			// 如果是超时
-			if (delayset.size()) {
-				auto now = std::chrono::system_clock::now();
-				auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - pre).count();
-				if (diff >= delaytime) {
-					for (auto& path : delayset)
-					{
-						auto it = listeners.equal_range(path);
-						for (auto b = it.first; b != it.second; ++b)
-						{
-							LOG_INFO("file modify %s", path.c_str());
-							b->second->callback(path);
-						}
-					}
-					delayset.clear();
-				}
 			}
 			continue;
 		}
