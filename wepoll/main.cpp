@@ -12,6 +12,36 @@
 #include <cassert>
 #include <format>
 
+static int SendBuff(SOCKET s, const char* buf, int size) {
+    int cur = 0;
+    while (cur < size) {
+        int rc = ::send(s, buf + cur, size - cur, 0);
+        if (rc < 0) {
+            if (WSAEINTR == WSAGetLastError()) {
+                continue;
+            }
+            break;
+        }
+        cur += rc;
+    }
+    return cur;
+}
+
+static std::string ReadBuf(SOCKET s, int size) {
+    std::string data; data.resize(size);
+
+    do {
+        int rc = ::recv(s, data.data(), size, 0);
+        if (rc < 0 && WSAEINTR == WSAGetLastError()) {
+            continue;
+        }
+        if (rc > 0) {
+            data.resize(rc);
+        }
+    } while (0);
+    return data;
+}
+
 int main()
 {
     std::int16_t port = 9595;
@@ -63,13 +93,40 @@ int main()
                 if (event[0].data.sock == h_server) {
                     // 服务端监听到client
                     std::cout << std::format("server get:") << std::endl;
+
+                    if (h_session != INVALID_SOCKET) {
+                        epoll_ctl(fd, EPOLL_CTL_DEL, event[2].data.sock, event + 2);
+                        closesocket(h_session);
+                    }
+
+                    struct sockaddr_in addr_client;
+                    int len = sizeof(addr_client);
+                    h_session = ::accept(h_server, (struct sockaddr*)&addr_client, &len);
+                    if (h_session != INVALID_SOCKET) {
+                        event[2].events = EPOLLIN;
+                        event[2].data.sock = h_session;
+                        epoll_ctl(fd, EPOLL_CTL_ADD, event[2].data.sock, event + 2);
+                        poll_size++;
+
+                        // 直接测试发消息
+                        std::string_view buf("hello world");
+                        SendBuff(h_session, buf.data(), buf.size());
+                    }
                 }
                 else if (event[0].data.sock == h_client) {
                     std::cout << std::format("client get:") << std::endl;
+
+                    auto buf = ReadBuf(h_client, 32);
+                    std::cout << buf << std::endl;
+
+                    SendBuff(h_client, buf.data(), buf.size());
                 }
                 else if (event[0].data.sock == h_session) {
                     // server accept 拿到的session
                     std::cout << std::format("session get:") << std::endl;
+
+                    auto buf = ReadBuf(h_session, 32);
+                    std::cout << buf << std::endl;
                 }
             }
         }
